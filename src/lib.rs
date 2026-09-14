@@ -265,13 +265,7 @@ impl transport::loopback::Loopback for EthernetTransport {
     /// In order on one thread: a link does not listen, so the frame goes on
     /// first and the read-back takes it off.
     fn round(&self, payload: &[u8]) -> Result<Arrived> {
-        let far = self.far_end()?;
-        self.send_to(far.address(), payload)?;
-        let arrived = far.take_one()?;
-        if arrived.bytes != payload {
-            return Err(protocol_error("sent, but what came off the link differs"));
-        }
-        Ok(arrived)
+        self.round_in_order(payload)
     }
 }
 
@@ -279,23 +273,18 @@ impl transport::loopback::Loopback for EthernetTransport {
 mod tests {
     use super::*;
     use transport::loopback::Loopback as _;
+    use transport::payload::edge_payloads;
 
     /// The shapes a protocol breaks on, as the Playground lists them.
-    fn edge_payloads() -> Vec<(&'static str, Vec<u8>)> {
-        vec![
-            ("empty", Vec::new()),
-            ("one byte", vec![0x2a]),
-            ("every byte", (0..=255).collect()),
-            ("nul run", vec![0; 512]),
-            ("high bytes", vec![0xff; 512]),
-            ("crlf storm", b"\r\n".repeat(400)),
-            (
-                "the brim",
-                (0..MTU)
-                    .map(|n| u8::try_from(n % 251).unwrap_or(0))
-                    .collect(),
-            ),
-        ]
+    fn payloads() -> Vec<(&'static str, Vec<u8>)> {
+        let mut payloads = edge_payloads();
+        payloads.extend([(
+            "the brim",
+            (0..MTU)
+                .map(|n| u8::try_from(n % 251).unwrap_or(0))
+                .collect(),
+        )]);
+        payloads
     }
 
     #[test]
@@ -316,7 +305,7 @@ mod tests {
     #[test]
     fn the_loopback_returns_the_edges_whole_and_refuses_over_the_brim() {
         let loopback = EthernetTransport::loopback();
-        for (name, bytes) in edge_payloads() {
+        for (name, bytes) in payloads() {
             let arrived = loopback
                 .round(&bytes)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
