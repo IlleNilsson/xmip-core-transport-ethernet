@@ -10,6 +10,7 @@
 use std::fmt;
 use std::str::FromStr;
 
+use transport::ceiling;
 use transport::error::{Result, TransportError, protocol_error};
 
 /// The payload one standard frame carries: the IEEE 802.3 maximum
@@ -52,34 +53,24 @@ impl Mac {
     }
 }
 
+/// `aa:bb:cc:dd:ee:ff`, in the one notation `net::mac` writes.
 impl fmt::Display for Mac {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (at, byte) in self.0.iter().enumerate() {
-            if at > 0 {
-                f.write_str(":")?;
-            }
-            write!(f, "{byte:02x}")?;
-        }
-        Ok(())
+        f.write_str(&net::mac::notation(&self.0))
     }
 }
 
 impl FromStr for Mac {
     type Err = TransportError;
 
-    /// `aa:bb:cc:dd:ee:ff`, or with dashes.
+    /// Six octets in any spelling `net::mac` reads: colons, dashes, or the
+    /// dotted form.
     fn from_str(text: &str) -> Result<Self> {
-        let bad = || protocol_error(format!("{text:?} is not a MAC address"));
-        let mut bytes = [0u8; 6];
-        let mut parts = text.split([':', '-']);
-        for byte in &mut bytes {
-            let part = parts.next().ok_or_else(bad)?;
-            *byte = u8::from_str_radix(part, 16).map_err(|_| bad())?;
-        }
-        if parts.next().is_some() {
-            return Err(bad());
-        }
-        Ok(Self(bytes))
+        net::mac::parse(text)
+            .ok()
+            .and_then(|octets| <[u8; 6]>::try_from(octets).ok())
+            .map(Self)
+            .ok_or_else(|| protocol_error(format!("{text:?} is not a MAC address")))
     }
 }
 
@@ -102,12 +93,7 @@ impl Frame {
     /// # Errors
     /// Outside those bounds.
     pub fn new(destination: Mac, source: Mac, ethertype: u16, payload: &[u8]) -> Result<Self> {
-        if payload.len() > JUMBO_MTU {
-            return Err(protocol_error(format!(
-                "{} bytes is over the {JUMBO_MTU} a jumbo frame carries",
-                payload.len()
-            )));
-        }
+        ceiling::within(payload.len(), JUMBO_MTU, "a jumbo frame carries")?;
         if ethertype < FIRST_ETHERTYPE {
             return Err(protocol_error("an 802.3 length where an EtherType belongs"));
         }
@@ -251,6 +237,7 @@ mod tests {
         assert_eq!(mac, Mac([2, 0, 0, 0, 0, 0xff]));
         assert_eq!(mac.to_string(), "02:00:00:00:00:ff");
         assert_eq!("02-00-00-00-00-FF".parse::<Mac>().expect("dashes"), mac);
+        assert_eq!("0200.0000.00ff".parse::<Mac>().expect("dotted"), mac);
         assert!("02:00:00:00:00".parse::<Mac>().is_err(), "short");
         assert!("02:00:00:00:00:ff:00".parse::<Mac>().is_err(), "long");
         assert!("02:00:00:00:00:zz".parse::<Mac>().is_err(), "not hex");

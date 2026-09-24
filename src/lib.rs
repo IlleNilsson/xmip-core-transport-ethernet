@@ -32,7 +32,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 pub use frame::{Frame, JUMBO_MTU, MIN_PAYLOAD, MTU, Mac, XMIP_ETHERTYPE};
+use transport::ceiling;
 use transport::error::{Result, protocol_error};
+use transport::held::Held;
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT};
 use transport::{Arrived, Directions, Transport};
 
@@ -163,13 +165,7 @@ impl EthernetTransport {
     /// # Errors
     /// A payload over the MTU, or a link that refused the frame.
     pub fn transmit(&self, destination: Mac, bytes: &[u8]) -> Result<()> {
-        if bytes.len() > self.mtu {
-            return Err(protocol_error(format!(
-                "{} bytes is over the {} one frame carries on this link",
-                bytes.len(),
-                self.mtu
-            )));
-        }
+        ceiling::within(bytes.len(), self.mtu, "one frame carries on this link")?;
         self.link.transmit(&Frame::new(
             destination,
             self.source,
@@ -224,24 +220,6 @@ impl EthernetTransport {
     }
 }
 
-/// The link the frame went on. Nothing waits: the round is in order.
-struct OnTheLink {
-    transport: EthernetTransport,
-    address: String,
-}
-
-impl FarEnd for OnTheLink {
-    fn address(&self) -> &str {
-        &self.address
-    }
-
-    fn take_one(self: Box<Self>) -> Result<Arrived> {
-        self.transport
-            .receive_one()?
-            .ok_or_else(|| protocol_error("nothing came over the link"))
-    }
-}
-
 /// One frame is one Stream: the MTU is the ceiling, and a payload over it
 /// is refused rather than fragmented — fragmentation is IP's, above.
 impl transport::loopback::Loopback for EthernetTransport {
@@ -249,11 +227,14 @@ impl transport::loopback::Loopback for EthernetTransport {
         Some(self.mtu)
     }
 
+    /// The link the frame went on. Nothing waits: the round is in order.
     fn far_end(&self) -> Result<Box<dyn FarEnd>> {
-        Ok(Box::new(OnTheLink {
-            transport: self.clone(),
-            address: self.target(),
-        }))
+        let transport = self.clone();
+        Ok(Box::new(Held::new(self.target(), move || {
+            transport
+                .receive_one()?
+                .ok_or_else(|| protocol_error("nothing came over the link"))
+        })))
     }
 
     fn send_to(&self, address: &str, payload: &[u8]) -> Result<()> {
