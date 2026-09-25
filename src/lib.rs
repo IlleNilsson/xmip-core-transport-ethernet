@@ -241,12 +241,10 @@ impl transport::loopback::Loopback for EthernetTransport {
         self.send(address, payload)
     }
 
-    fn unblock(&self, _address: &str) {}
-
     /// In order on one thread: a link does not listen, so the frame goes on
     /// first and the read-back takes it off.
-    fn round(&self, payload: &[u8]) -> Result<Arrived> {
-        self.round_in_order(payload)
+    fn exchanges_in_order(&self) -> bool {
+        true
     }
 }
 
