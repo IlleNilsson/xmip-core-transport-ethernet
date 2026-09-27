@@ -36,7 +36,11 @@ use transport::ceiling;
 use transport::error::{Result, protocol_error};
 use transport::held::Held;
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT};
-use transport::{Arrived, Directions, Transport};
+use transport::{Arrived, Configured, Directions, Transport};
+use xcore::settings::{Applies, Fixed, Kind, Presence, Read, Setting, Settings};
+
+/// How long a receive waits on a quiet link unless a Location says.
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Where frames go and come from.
 pub trait Link: Send + Sync {
@@ -111,7 +115,7 @@ impl EthernetTransport {
             destination,
             ethertype: XMIP_ETHERTYPE,
             mtu: MTU,
-            timeout: Duration::from_secs(1),
+            timeout: DEFAULT_TIMEOUT,
         }
     }
 
@@ -205,6 +209,97 @@ impl Transport for EthernetTransport {
     }
 }
 
+/// The link a Location's address names: the one way from an address to a
+/// link, for this technology and every one that rides on it (ethercat).
+/// This build carries the in-process link only, `loopback`.
+///
+/// # Errors
+/// Any other name: a raw-socket link is the node's to implement.
+pub fn open_link(address: &str) -> Result<Arc<dyn Link>> {
+    match address {
+        "loopback" => Ok(Arc::new(Loopback::new())),
+        other => Err(protocol_error(format!(
+            "{other:?} is not a link this build carries: only the in-process \
+             \"loopback\"; a raw-socket link is the node's to implement"
+        ))),
+    }
+}
+
+impl Configured for EthernetTransport {
+    /// The address is the link the frames go on, by its name. This build
+    /// carries the in-process link only, `loopback`; a node with the raw
+    /// socket's privilege implements [`Link`] over it (the crate's own
+    /// documentation), and every other name is refused until it does.
+    const SETTINGS: &'static Settings = &Settings {
+        technology: env!("CARGO_PKG_NAME"),
+        settings: &[
+            Setting {
+                name: "source",
+                kind: Kind::Address,
+                presence: Presence::Required,
+                meaning: "The MAC address a frame is sent from.",
+                applies: Applies::Send,
+            },
+            Setting {
+                name: "destination",
+                kind: Kind::Address,
+                presence: Presence::Required,
+                meaning: "The MAC address a frame is sent to unless the target names another.",
+                applies: Applies::Send,
+            },
+            Setting {
+                name: "ethertype",
+                kind: Kind::Integer {
+                    minimum: 0x0600,
+                    maximum: 0xffff,
+                },
+                presence: Presence::Default(Fixed::Integer(XMIP_ETHERTYPE as i64)),
+                meaning: "The EtherType a frame is sent under, as a protocol above names its own.",
+                applies: Applies::Send,
+            },
+            Setting {
+                name: "jumbo",
+                kind: Kind::Boolean,
+                presence: Presence::Default(Fixed::Boolean(false)),
+                meaning: "Whether the link carries jumbo frames, raising the ceiling to 9000 bytes.",
+                applies: Applies::Send,
+            },
+            Setting {
+                name: "timeout",
+                kind: Kind::Duration,
+                presence: Presence::Default(Fixed::Duration(DEFAULT_TIMEOUT)),
+                meaning: "How long a receive waits on a quiet link.",
+                applies: Applies::Receive,
+            },
+        ],
+    };
+
+    /// A Receive Location sends nothing, so it has no addresses of its own:
+    /// the unspecified address stands where a Send Location's are.
+    fn configured(address: &str, settings: &Read) -> Result<Self> {
+        let link = open_link(address)?;
+        let unspecified = Mac([0; 6]);
+        let mac = |name| {
+            settings
+                .optional_text(name)
+                .map_or(Ok(unspecified), str::parse::<Mac>)
+        };
+        let mut transport = Self::new(link, mac("source")?, mac("destination")?);
+        if let Some(ethertype) = settings.optional_integer("ethertype") {
+            let ethertype = u16::try_from(ethertype)
+                .map_err(|_| protocol_error("an EtherType is at most 0xffff"))?;
+            transport = transport.under(ethertype);
+        }
+        if settings.optional_boolean("jumbo") == Some(true) {
+            transport = transport.jumbo();
+        }
+        if let Some(timeout) = settings.optional_duration("timeout") {
+            transport = transport.timing_out_after(timeout);
+        }
+        Ok(transport)
+    }
+}
+
 impl EthernetTransport {
     /// Both ends on one in-process link, two locally administered
     /// addresses, the loopback timeout standing where an adapter would wait
@@ -253,6 +348,41 @@ mod tests {
     use super::*;
     use transport::loopback::Loopback as _;
     use transport::payload::edge_payloads;
+    use xcore::settings::Given;
+
+    #[test]
+    fn ethernet_declares_its_settings_and_reads_through_them() {
+        assert_eq!(EthernetTransport::SETTINGS.problems(), Vec::<String>::new());
+        let given = [
+            (
+                "source".to_string(),
+                Given::Text("02:00:00:00:00:01".to_string()),
+            ),
+            (
+                "destination".to_string(),
+                Given::Text("02-00-00-00-00-02".to_string()),
+            ),
+            ("ethertype".to_string(), Given::Integer(0x88b6)),
+            ("jumbo".to_string(), Given::Boolean(true)),
+        ];
+        let built = EthernetTransport::open("loopback", Applies::Send, &given).expect("built");
+        assert_eq!(built.source, Mac([2, 0, 0, 0, 0, 1]));
+        assert_eq!(built.destination, Mac([2, 0, 0, 0, 0, 2]));
+        assert_eq!(built.ethertype, 0x88b6);
+        assert_eq!(built.mtu(), JUMBO_MTU);
+        let receiving =
+            EthernetTransport::open("loopback", Applies::Receive, &[]).expect("receiving");
+        assert_eq!(receiving.timeout, DEFAULT_TIMEOUT);
+        let Err(refused) = EthernetTransport::open("loopback", Applies::Send, &given[1..]) else {
+            panic!("source is required");
+        };
+        assert!(
+            refused.message.contains("\"source\""),
+            "{}",
+            refused.message
+        );
+        assert!(EthernetTransport::open("eth0", Applies::Receive, &[]).is_err());
+    }
 
     /// The shapes a protocol breaks on, as the Playground lists them.
     fn payloads() -> Vec<(&'static str, Vec<u8>)> {
