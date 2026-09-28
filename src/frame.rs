@@ -10,7 +10,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use transport::ceiling;
+use net::ceiling;
 use transport::error::{Result, TransportError, protocol_error};
 
 /// The payload one standard frame carries: the IEEE 802.3 maximum
@@ -30,7 +30,7 @@ pub const MIN_PAYLOAD: usize = 46;
 pub const XMIP_ETHERTYPE: u16 = 0x88b5;
 
 /// The tag protocol identifier that says an 802.1Q tag follows.
-pub const TAG_PROTOCOL: u16 = 0x8100;
+const TAG_PROTOCOL: u16 = 0x8100;
 
 /// The first value that is an `EtherType` rather than an 802.3 length.
 const FIRST_ETHERTYPE: u16 = 0x0600;
@@ -115,7 +115,8 @@ impl Frame {
 
     /// The VLAN the tag names, where there is one.
     #[must_use]
-    pub fn vlan(&self) -> Option<u16> {
+    #[cfg(test)]
+    fn vlan(&self) -> Option<u16> {
         self.tag.map(|tag| tag & 0x0fff)
     }
 
