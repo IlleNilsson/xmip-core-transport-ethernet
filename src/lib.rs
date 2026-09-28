@@ -32,7 +32,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 pub use frame::{Frame, JUMBO_MTU, MIN_PAYLOAD, MTU, Mac, XMIP_ETHERTYPE};
-use transport::ceiling;
+use net::{Target, ceiling};
 use transport::error::{Result, protocol_error};
 use transport::held::Held;
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT};
@@ -201,7 +201,9 @@ impl Transport for EthernetTransport {
     /// `target` may name a destination, `ethernet://eth0/02:00:00:00:00:02`,
     /// overriding the transport's.
     fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
-        let destination = match transport::socket::target("ethernet", target) {
+        let destination = match Target::under(&["ethernet"], target)
+            .map(|named| (named.authority(), named.path()))
+        {
             Some((_, mac)) if !mac.is_empty() => mac.parse()?,
             _ => self.destination,
         };
