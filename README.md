@@ -4,6 +4,12 @@ Ethernet transport: raw IEEE 802.3 frames below IP under Xmip's own EtherType â€
 
 A send target is read by `net::Target` in [xmip-core-library-net](https://github.com/IlleNilsson/xmip-core-library-net), the one reading of a URI every technology calls: scheme, authority, path and decoded query. Until 2026-09-28 it was read through the transport capability's `socket::target`, which split it on its first slash and left the query in the path.
 
+## Acknowledgement
+
+Acceptance is at-most-once here. A raw Ethernet frame has no reply: it is off
+the wire as it is read, so nobody is left to tell how the receive cycle ended.
+Each frame arrives whole.
+
 ## Toolchain
 
 `rust-toolchain.toml` pins the toolchain for the whole estate. Do not change it
