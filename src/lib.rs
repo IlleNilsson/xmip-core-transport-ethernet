@@ -24,6 +24,10 @@
 //!
 //! The origin URI carries what the header knew:
 //! `ethernet://<link>/<source mac>?type=0x88b5`.
+//!
+//! **Acceptance is at-most-once here** ([`AT_MOST_ONCE`]): a raw frame has
+//! no reply, so the frame is off the wire as it is read and nobody is told
+//! how the receive cycle ended. Each frame arrives whole.
 
 pub mod frame;
 
@@ -36,8 +40,12 @@ use net::{Target, ceiling};
 use transport::error::{Result, protocol_error};
 use transport::held::Held;
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT};
-use transport::{Arrived, Configured, Directions, Transport};
+use transport::{Acknowledgement, Arrived, Configured, Directions, Transport};
 use xcore::settings::{Applies, Fixed, Kind, Presence, Read, Setting, Settings};
+
+/// Why an Ethernet frame cannot be acknowledged after the receive cycle.
+pub const AT_MOST_ONCE: &str = "a raw Ethernet frame has no reply: it is off the wire as it is \
+                                read, and nobody is left to tell the verdict";
 
 /// How long a receive waits on a quiet link unless a Location says.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(1);
@@ -152,16 +160,19 @@ impl EthernetTransport {
         &self.link
     }
 
-    /// The next frame on the link as a Stream, or `None` when the link is
-    /// quiet.
+    /// The next frame on the link as a Stream, whole, or `None` when the
+    /// link is quiet. Acceptance is at-most-once ([`AT_MOST_ONCE`]).
     ///
     /// # Errors
     /// Where the link could not be read.
     pub fn receive_one(&self) -> Result<Option<Arrived>> {
-        Ok(self
-            .link
-            .receive(self.timeout)?
-            .map(|frame| Arrived::new(frame.origin(self.link.name()), frame.payload)))
+        Ok(self.link.receive(self.timeout)?.map(|frame| {
+            Arrived::whole(
+                frame.origin(self.link.name()),
+                frame.payload,
+                Acknowledgement::at_most_once(AT_MOST_ONCE),
+            )
+        }))
     }
 
     /// `bytes` as one frame to `destination`.
@@ -193,7 +204,13 @@ impl Transport for EthernetTransport {
         Directions::BOTH
     }
 
-    /// Nothing on the link is not an error: an empty vector.
+    fn arrivals(&self) -> transport::Arrivals {
+        transport::Arrivals::Ordered("one line or bus, answered in the order it speaks")
+    }
+
+    /// Nothing on the link is not an error: an empty vector. Acceptance is
+    /// at-most-once here: a raw frame has no reply to defer
+    /// ([`AT_MOST_ONCE`]).
     fn receive(&self) -> Result<Vec<Arrived>> {
         Ok(self.receive_one()?.into_iter().collect())
     }
@@ -330,7 +347,8 @@ impl transport::loopback::Loopback for EthernetTransport {
         Ok(Box::new(Held::new(self.target(), move || {
             transport
                 .receive_one()?
-                .ok_or_else(|| protocol_error("nothing came over the link"))
+                .ok_or_else(|| protocol_error("nothing came over the link"))?
+                .taken()
         })))
     }
 
@@ -454,6 +472,8 @@ mod tests {
         assert_eq!(first.ethertype, 0x88b6);
         assert_eq!(first.payload, [0xaa]);
         let second = transport.receive_one().expect("read").expect("a frame");
+        assert!(!second.defers(), "a raw frame is at-most-once");
+        let second = second.taken().expect("taken");
         assert_eq!(
             second.origin_uri,
             "ethernet://loopback/02:00:00:00:00:01?type=0x88b6"
