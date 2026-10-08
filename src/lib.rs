@@ -172,6 +172,7 @@ impl EthernetTransport {
                 frame.payload,
                 Acknowledgement::at_most_once(AT_MOST_ONCE),
             )
+            .from_peer_mac(&frame.source)
         }))
     }
 
@@ -337,6 +338,10 @@ impl EthernetTransport {
 /// One frame is one Stream: the MTU is the ceiling, and a payload over it
 /// is refused rather than fragmented — fragmentation is IP's, above.
 impl transport::loopback::Loopback for EthernetTransport {
+    fn arrival_identity(&self) -> transport::ArrivalIdentity {
+        transport::ArrivalIdentity::PEER_MAC
+    }
+
     fn ceiling(&self) -> Option<usize> {
         Some(self.mtu)
     }
