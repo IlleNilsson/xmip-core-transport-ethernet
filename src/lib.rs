@@ -209,6 +209,10 @@ impl Transport for EthernetTransport {
         transport::Arrivals::Ordered("one line or bus, answered in the order it speaks")
     }
 
+    fn waiting(&self) -> transport::Waiting {
+        transport::Waiting::Polled("a read of the loopback link returns at once")
+    }
+
     /// Nothing on the link is not an error: an empty vector. Acceptance is
     /// at-most-once here: a raw frame has no reply to defer
     /// ([`AT_MOST_ONCE`]).
