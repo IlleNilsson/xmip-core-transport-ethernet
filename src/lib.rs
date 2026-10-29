@@ -228,7 +228,7 @@ impl Transport for EthernetTransport {
     /// overriding the transport's.
     fn send_from(&self, target: &str, outgoing: transport::Outgoing<'_>) -> Result<()> {
         let bytes: &[u8] = &outgoing.gather()?;
-        let destination = match Target::under(&["ethernet"], target)
+        let destination = match Target::under(Self::SCHEMES, target)
             .map(|named| (named.authority(), named.path()))
         {
             Some((_, mac)) if !mac.is_empty() => mac.parse()?,
@@ -302,6 +302,9 @@ impl Configured for EthernetTransport {
             },
         ],
     };
+
+    /// The schemes a Location's address is entered with to choose this technology.
+    const SCHEMES: &'static [&'static str] = &["ethernet"];
 
     /// A Receive Location sends nothing, so it has no addresses of its own:
     /// the unspecified address stands where a Send Location's are.
