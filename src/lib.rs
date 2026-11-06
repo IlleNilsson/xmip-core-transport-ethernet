@@ -32,8 +32,9 @@
 pub mod frame;
 
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use xcore::lock::Locked;
 
 pub use frame::{Frame, JUMBO_MTU, MIN_PAYLOAD, MTU, Mac, XMIP_ETHERTYPE};
 use net::{Target, ceiling};
@@ -85,18 +86,11 @@ impl Link for Loopback {
     }
 
     fn receive(&self, _timeout: Duration) -> Result<Option<Frame>> {
-        Ok(self
-            .frames
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .pop_front())
+        Ok(self.frames.locked().pop_front())
     }
 
     fn transmit(&self, frame: &Frame) -> Result<()> {
-        self.frames
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push_back(frame.clone());
+        self.frames.locked().push_back(frame.clone());
         Ok(())
     }
 }
