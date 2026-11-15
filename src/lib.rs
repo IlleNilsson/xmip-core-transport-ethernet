@@ -135,13 +135,6 @@ impl EthernetTransport {
         self
     }
 
-    /// Give up waiting on a quiet link after `timeout`.
-    #[must_use]
-    pub const fn timing_out_after(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
-    }
-
     /// The largest payload one frame carries on this link.
     #[must_use]
     pub const fn mtu(&self) -> usize {
@@ -287,18 +280,20 @@ impl Configured for EthernetTransport {
                 meaning: "Whether the link carries jumbo frames, raising the ceiling to 9000 bytes.",
                 applies: Applies::Send,
             },
-            Setting {
-                name: "timeout",
-                kind: Kind::Duration,
-                presence: Presence::Default(Fixed::Duration(DEFAULT_TIMEOUT)),
-                meaning: "How long a receive waits on a quiet link.",
-                applies: Applies::Receive,
-            },
+            transport::configured::timeout(
+                Applies::Receive,
+                Some(DEFAULT_TIMEOUT),
+                "How long a receive waits on a quiet link.",
+            ),
         ],
     };
 
     /// The schemes a Location's address is entered with to choose this technology.
     const SCHEMES: &'static [&'static str] = &["ethernet"];
+
+    fn timeout_kept(&mut self) -> Option<&mut dyn transport::configured::TimeoutKept> {
+        Some(&mut self.timeout)
+    }
 
     /// A Receive Location sends nothing, so it has no addresses of its own:
     /// the unspecified address stands where a Send Location's are.
@@ -318,9 +313,6 @@ impl Configured for EthernetTransport {
         }
         if settings.optional_boolean("jumbo") == Some(true) {
             transport = transport.jumbo();
-        }
-        if let Some(timeout) = settings.optional_duration("timeout") {
-            transport = transport.timing_out_after(timeout);
         }
         Ok(transport)
     }
