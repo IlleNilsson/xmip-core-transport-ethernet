@@ -20,6 +20,18 @@ xcore = { package = "xmip-core", git = "https://github.com/IlleNilsson/xmip-core
 # A MAC address in IEEE 802 notation, read and written once.
 net = { package = "xmip-core-library-net", git = "https://github.com/IlleNilsson/xmip-core-library-net", branch = "main" }
 
+# The kernel's link on Linux, behind the `packet` feature (`packet.rs`): a raw
+# `AF_PACKET` socket bound to the interface a Location names, through
+# `nix`'s safe calls — the interface's own link address taken from the
+# kernel's list of interfaces (`getifaddrs`), so nothing here builds a
+# `sockaddr_ll` and this crate keeps no `unsafe`. Off by default: the socket
+# needs `CAP_NET_RAW`, which a box grants a node or does not.
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { version = "0.31", default-features = false, features = ["net"], optional = true }
+
+[features]
+packet = ["dep:nix"]
+
 [dev-dependencies]
 # The loopback payloads the tests drive, from the capability's test
 # support and never a production build (ADR-0044).

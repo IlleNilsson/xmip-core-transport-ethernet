@@ -12,15 +12,14 @@
 //! frame and the link rather than knowing a wire of their own.
 //!
 //! Two links. [`Loopback`] is an in-process wire that every test and every
-//! box drives, the way can-bus has a loopback bus. The deployment route is
-//! the operating system's raw socket — `AF_PACKET` on Linux, a BPF device
-//! on the BSDs and macOS, Npcap on Windows — which needs a privilege the
-//! build box does not grant and a binding no crate in this estate writes
-//! without `unsafe`; a node with the privilege implements [`Link`] over it
-//! and everything above is unchanged. A raw socket pads a short payload to
+//! box drives, the way can-bus has a loopback bus. The kernel's is the
+//! operating system's raw socket: on Linux, behind the `packet` feature,
+//! `AF_PACKET` bound to the interface a Location names (`packet.rs`), which
+//! needs `CAP_NET_RAW`; a BPF device on the BSDs and macOS and Npcap on
+//! Windows are not written. A raw socket's adapter pads a short payload to
 //! [`MIN_PAYLOAD`] and the protocol above knows its own length; the
-//! in-process link does not, and a Stream shorter than that comes back
-//! whole.
+//! in-process link and a virtual pair do not, and a Stream shorter than
+//! that comes back whole.
 //!
 //! The origin URI carries what the header knew:
 //! `ethernet://<link>/<source mac>?type=0x88b5`.
@@ -30,6 +29,8 @@
 //! how the receive cycle ended. Each frame arrives whole.
 
 pub mod frame;
+#[cfg(all(feature = "packet", target_os = "linux"))]
+pub mod packet;
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -226,26 +227,33 @@ impl Transport for EthernetTransport {
 }
 
 /// The link a Location's address names: the one way from an address to a
-/// link, for this technology and every one that rides on it (ethercat).
-/// This build carries the in-process link only, `loopback`.
+/// link, for this technology and every one that rides on it (ethercat,
+/// profinet). `loopback` is the in-process link; any other name is the
+/// interface of that name, through the kernel's raw socket, where the build
+/// carries `packet` on Linux (`packet::PacketLink`).
 ///
 /// # Errors
-/// Any other name: a raw-socket link is the node's to implement.
+/// An interface the kernel will not open, or any name but `loopback` in a
+/// build without the kernel's link.
 pub fn open_link(address: &str) -> Result<Arc<dyn Link>> {
     match address {
         "loopback" => Ok(Arc::new(Loopback::new())),
-        other => Err(protocol_error(format!(
-            "{other:?} is not a link this build carries: only the in-process \
-             \"loopback\"; a raw-socket link is the node's to implement"
-        ))),
+        interface => cfg_select! {
+            all(feature = "packet", target_os = "linux") => {
+                Ok(Arc::new(packet::PacketLink::open(interface)?))
+            }
+            _ => Err(protocol_error(format!(
+                "{interface:?} is not a link this build carries: only the in-process \
+                 \"loopback\"; the kernel's raw socket is Linux's, behind `packet`"
+            ))),
+        },
     }
 }
 
 impl Configured for EthernetTransport {
-    /// The address is the link the frames go on, by its name. This build
-    /// carries the in-process link only, `loopback`; a node with the raw
-    /// socket's privilege implements [`Link`] over it (the crate's own
-    /// documentation), and every other name is refused until it does.
+    /// The address is the link the frames go on, by its name: `loopback`,
+    /// the in-process link, or an interface, `eth0`, where the build carries
+    /// the kernel's raw socket ([`open_link`]).
     const SETTINGS: &'static Settings = &Settings {
         technology: env!("CARGO_PKG_NAME"),
         settings: &[
