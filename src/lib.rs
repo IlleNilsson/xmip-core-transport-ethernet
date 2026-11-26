@@ -27,32 +27,56 @@
 //! **Acceptance is at-most-once here** ([`AT_MOST_ONCE`]): a raw frame has
 //! no reply, so the frame is off the wire as it is read and nobody is told
 //! how the receive cycle ended. Each frame arrives whole.
+//!
+//! **Built with its `declaration` feature alone** the crate is
+//! [`declaration`], what a Location of it is configured with, on every
+//! operating system, and none of the code above, which is behind the
+//! default feature, the kernel's link included: what the surfaces' library
+//! carries (ADR-0064, amendment 2026-11-26).
 
+#[cfg(feature = "declaration")]
+pub mod declaration;
+#[cfg(feature = "default")]
 pub mod frame;
 #[cfg(all(feature = "packet", target_os = "linux"))]
 pub mod packet;
 
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use xcore::lock::Locked;
+#[cfg(feature = "default")]
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
-pub use frame::{Frame, JUMBO_MTU, MIN_PAYLOAD, MTU, Mac, XMIP_ETHERTYPE};
+#[cfg(feature = "default")]
+use declaration::DEFAULT_TIMEOUT;
+/// Xmip's own `EtherType`, at the crate's root for the protocols riding on
+/// the frame.
+#[cfg(feature = "default")]
+pub use declaration::XMIP_ETHERTYPE;
+#[cfg(feature = "default")]
+pub use frame::{Frame, JUMBO_MTU, MIN_PAYLOAD, MTU, Mac};
+#[cfg(feature = "default")]
 use net::{Target, ceiling};
+#[cfg(feature = "default")]
 use transport::error::{Result, protocol_error};
-use transport::held::Held;
+#[cfg(feature = "default")]
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT};
-use transport::{Acknowledgement, Arrived, Configured, Directions, Transport};
-use xcore::settings::{Applies, Fixed, Kind, Presence, Read, Setting, Settings};
+#[cfg(feature = "default")]
+use transport::{Acknowledgement, Arrived, Configured, Directions, Transport, held::Held};
+#[cfg(feature = "default")]
+use xcore::{
+    lock::Locked,
+    settings::{Read, Settings},
+};
 
 /// Why an Ethernet frame cannot be acknowledged after the receive cycle.
+#[cfg(feature = "default")]
 pub const AT_MOST_ONCE: &str = "a raw Ethernet frame has no reply: it is off the wire as it is \
                                 read, and nobody is left to tell the verdict";
 
-/// How long a receive waits on a quiet link unless a Location says.
-pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(1);
-
 /// Where frames go and come from.
+#[cfg(feature = "default")]
 pub trait Link: Send + Sync {
     /// The link's name, for the origin URI: `eth0`, `loopback`.
     fn name(&self) -> &str;
@@ -69,11 +93,13 @@ pub trait Link: Send + Sync {
 }
 
 /// An in-process wire: what is transmitted is received, in order.
+#[cfg(feature = "default")]
 #[derive(Clone, Default)]
 pub struct Loopback {
     frames: Arc<Mutex<VecDeque<Frame>>>,
 }
 
+#[cfg(feature = "default")]
 impl Loopback {
     #[must_use]
     pub fn new() -> Self {
@@ -81,6 +107,7 @@ impl Loopback {
     }
 }
 
+#[cfg(feature = "default")]
 impl Link for Loopback {
     fn name(&self) -> &'static str {
         "loopback"
@@ -97,6 +124,7 @@ impl Link for Loopback {
 }
 
 /// A Stream as one frame under one `EtherType` on one link.
+#[cfg(feature = "default")]
 #[derive(Clone)]
 pub struct EthernetTransport {
     link: Arc<dyn Link>,
@@ -107,6 +135,7 @@ pub struct EthernetTransport {
     timeout: Duration,
 }
 
+#[cfg(feature = "default")]
 impl EthernetTransport {
     /// A transport on `link`, sending from `source` to `destination` under
     /// [`XMIP_ETHERTYPE`], one standard frame at a time.
@@ -184,6 +213,7 @@ impl EthernetTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl Transport for EthernetTransport {
     fn name(&self) -> &'static str {
         "ethernet"
@@ -235,6 +265,7 @@ impl Transport for EthernetTransport {
 /// # Errors
 /// An interface the kernel will not open, or any name but `loopback` in a
 /// build without the kernel's link.
+#[cfg(feature = "default")]
 pub fn open_link(address: &str) -> Result<Arc<dyn Link>> {
     match address {
         "loopback" => Ok(Arc::new(Loopback::new())),
@@ -250,54 +281,11 @@ pub fn open_link(address: &str) -> Result<Arc<dyn Link>> {
     }
 }
 
+/// The address is the link ([`open_link`]).
+#[cfg(feature = "default")]
 impl Configured for EthernetTransport {
-    /// The address is the link the frames go on, by its name: `loopback`,
-    /// the in-process link, or an interface, `eth0`, where the build carries
-    /// the kernel's raw socket ([`open_link`]).
-    const SETTINGS: &'static Settings = &Settings {
-        technology: env!("CARGO_PKG_NAME"),
-        settings: &[
-            Setting {
-                name: "source",
-                kind: Kind::Address,
-                presence: Presence::Required,
-                meaning: "The MAC address a frame is sent from.",
-                applies: Applies::Send,
-            },
-            Setting {
-                name: "destination",
-                kind: Kind::Address,
-                presence: Presence::Required,
-                meaning: "The MAC address a frame is sent to unless the target names another.",
-                applies: Applies::Send,
-            },
-            Setting {
-                name: "ethertype",
-                kind: Kind::Integer {
-                    minimum: 0x0600,
-                    maximum: 0xffff,
-                },
-                presence: Presence::Default(Fixed::Integer(XMIP_ETHERTYPE as i64)),
-                meaning: "The EtherType a frame is sent under, as a protocol above names its own.",
-                applies: Applies::Send,
-            },
-            Setting {
-                name: "jumbo",
-                kind: Kind::Boolean,
-                presence: Presence::Default(Fixed::Boolean(false)),
-                meaning: "Whether the link carries jumbo frames, raising the ceiling to 9000 bytes.",
-                applies: Applies::Send,
-            },
-            transport::configured::timeout(
-                Applies::Receive,
-                Some(DEFAULT_TIMEOUT),
-                "How long a receive waits on a quiet link.",
-            ),
-        ],
-    };
-
-    /// The schemes a Location's address is entered with to choose this technology.
-    const SCHEMES: &'static [&'static str] = &["ethernet"];
+    const SETTINGS: &'static Settings = declaration::SETTINGS;
+    const SCHEMES: &'static [&'static str] = declaration::SCHEMES;
 
     fn timeout_kept(&mut self) -> Option<&mut dyn transport::configured::TimeoutKept> {
         Some(&mut self.timeout)
@@ -326,6 +314,7 @@ impl Configured for EthernetTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl EthernetTransport {
     /// Both ends on one in-process link, two locally administered
     /// addresses, the loopback timeout standing where an adapter would wait
@@ -343,6 +332,7 @@ impl EthernetTransport {
 
 /// One frame is one Stream: the MTU is the ceiling, and a payload over it
 /// is refused rather than fragmented — fragmentation is IP's, above.
+#[cfg(feature = "default")]
 impl transport::loopback::Loopback for EthernetTransport {
     fn arrival_identity(&self) -> transport::ArrivalIdentity {
         transport::ArrivalIdentity::PEER_MAC
@@ -379,7 +369,7 @@ mod tests {
     use super::*;
     use transport::loopback::Loopback as _;
     use transport::payload::edge_payloads;
-    use xcore::settings::Given;
+    use xcore::settings::{Applies, Given};
 
     #[test]
     fn ethernet_declares_its_settings_and_reads_through_them() {

@@ -4,7 +4,8 @@
 //! never sees them.
 //!
 //! The `EtherType` is what tells a frame from IP: `0x0800` is IPv4, `0x88a4`
-//! is `EtherCAT`, `0x8892` is PROFINET, and Xmip's own is [`XMIP_ETHERTYPE`],
+//! is `EtherCAT`, `0x8892` is PROFINET, and Xmip's own is
+//! [`XMIP_ETHERTYPE`](crate::declaration::XMIP_ETHERTYPE),
 //! the first of the two IEEE 802 reserves for local experiments.
 
 use std::fmt;
@@ -25,9 +26,6 @@ pub const JUMBO_MTU: usize = 9000;
 /// adapter, and a protocol above must know its own length. The in-process
 /// link does not pad, so a Stream shorter than this comes back whole.
 pub const MIN_PAYLOAD: usize = 46;
-
-/// Xmip's own `EtherType`: IEEE 802 local experimental `EtherType` 1.
-pub const XMIP_ETHERTYPE: u16 = 0x88b5;
 
 /// The tag protocol identifier that says an 802.1Q tag follows.
 const TAG_PROTOCOL: u16 = 0x8100;
@@ -185,6 +183,7 @@ impl Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::declaration::XMIP_ETHERTYPE;
 
     fn mac(last: u8) -> Mac {
         Mac([0x02, 0, 0, 0, 0, last])
